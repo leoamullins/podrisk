@@ -1,0 +1,24 @@
+[project]
+name = "podrisk"
+version = "0.1.0"
+description = "Portfolio risk analytics: price data, returns, and risk models"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "arch>=8.0.0",
+    "matplotlib>=3.11.2",
+    "numpy>=2.5.3",
+    "pandas>=3.0.6",
+    "scipy>=1.18.1",
+    "yfinance>=1.7.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["test"]
+markers = ["network: hits the network (deselect with -m 'not network')"]
