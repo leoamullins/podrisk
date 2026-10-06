@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from model import hs_es, hs_var
+from model import ewma_vol, hs_es, hs_var, param_es, param_var
 
 
 @pytest.fixture
@@ -62,3 +62,69 @@ def test_accepts_numpy_array(func, normal_returns):
     result = func(normal_returns.to_numpy())
     assert isinstance(result, pd.Series)
     pd.testing.assert_series_equal(result, func(normal_returns))
+
+
+def test_ewma_vol_matches_true_vol(normal_returns):
+    assert ewma_vol(normal_returns).mean() == pytest.approx(0.01, rel=0.05)
+
+
+def test_ewma_vol_warm_up(normal_returns):
+    vol = ewma_vol(normal_returns, min_periods=30)
+    # min_periods observations plus the one-day shift
+    assert vol.iloc[:30].isna().all()
+    assert vol.iloc[30:].notna().all()
+
+
+def test_ewma_vol_no_look_ahead(normal_returns):
+    shocked = normal_returns.copy()
+    shocked.iloc[1000] = -0.5
+    before = ewma_vol(normal_returns)
+    after = ewma_vol(shocked)
+    assert after.iloc[1000] == pytest.approx(before.iloc[1000])
+    assert after.iloc[1001] > before.iloc[1001]
+
+
+def test_ewma_vol_accepts_numpy_array(normal_returns):
+    result = ewma_vol(normal_returns.to_numpy())
+    assert isinstance(result, pd.Series)
+    pd.testing.assert_series_equal(result, ewma_vol(normal_returns))
+
+
+def test_param_normal_known_values():
+    # 99%: z = 2.3263, ES = pdf(z) / 0.01 = 2.6652
+    assert param_var(1.0, alpha=0.01) == pytest.approx(2.3263, abs=1e-4)
+    assert param_es(1.0, alpha=0.01) == pytest.approx(2.6652, abs=1e-4)
+    assert param_var(0.02, alpha=0.05) == pytest.approx(0.02 * 1.6449, abs=1e-5)
+
+
+def test_param_t_matches_simulation():
+    # t(5) draws rescaled to unit standard deviation
+    nu, alpha = 5, 0.01
+    rng = np.random.default_rng(0)
+    x = rng.standard_t(nu, 2_000_000) * np.sqrt((nu - 2) / nu)
+    q = np.quantile(x, alpha)
+    assert param_var(1.0, alpha=alpha, dist="t", nu=nu) == pytest.approx(-q, rel=0.01)
+    assert param_es(1.0, alpha=alpha, dist="t", nu=nu) == pytest.approx(
+        -x[x <= q].mean(), rel=0.02
+    )
+
+
+@pytest.mark.parametrize("dist", ["normal", "t"])
+def test_param_es_at_least_var(dist):
+    for alpha in (0.001, 0.01, 0.05, 0.1):
+        assert param_es(1.0, alpha=alpha, dist=dist) > param_var(1.0, alpha=alpha, dist=dist)
+
+
+def test_param_works_on_series(normal_returns):
+    sigma = ewma_vol(normal_returns)
+    var = param_var(sigma, alpha=0.01)
+    assert isinstance(var, pd.Series)
+    pd.testing.assert_index_equal(var.index, sigma.index)
+
+
+@pytest.mark.parametrize("func", [param_var, param_es])
+def test_param_rejects_bad_args(func):
+    with pytest.raises(ValueError):
+        func(1.0, dist="Normal")
+    with pytest.raises(ValueError):
+        func(1.0, dist="t", nu=2)
