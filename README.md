@@ -1,8 +1,102 @@
 # podrisk
 
-Portfolio risk analytics in Python: download prices, turn them into returns, and estimate Value at Risk (VaR) and Expected Shortfall (ES).
+Value at Risk (VaR) and Expected Shortfall (ES) models in Python, with statistical backtests, applied to a single equity index and to a hedged multi-desk portfolio.
 
-## Setup
+The project asks a practical question: **can a VaR model's forecasts be trusted, and does the answer depend on the portfolio?** Each model forecasts tomorrow's 99% VaR using only past data. Each forecast is then compared with what actually happened, using standard statistical coverage tests.
+
+## Key findings
+
+- **On SPY, every model is rejected.** EWMA forgets crashes within weeks and breaches too often in calm markets. Historical simulation reacts too slowly, so its breaches cluster in crises. GARCH comes closest, but SPY's losses are left-skewed (big down days are larger than big up days), which a symmetric Student-t tail cannot capture.
+- **On a hedged long/short book, the results reverse.** Hedging cancels most of the market's crash asymmetry, so the book's tail is close to normal. EWMA with a Student-t passes every test on every desk, while GARCH t becomes too conservative (20 breaches against 32 expected).
+- **The same model can be too risky for one portfolio and too cautious for another.** A fixed tail parameter (ν = 5) is too thin for SPY and too fat for the book.
+- **Diversification between desks reduces VaR by 28% on average.** The two desks' P&L has a −0.10 correlation, so the book's VaR is well below the sum of the desk VaRs.
+
+## Results
+
+All results are one-day 99% VaR, so a correct model breaches on about 1% of days. Each test reports a p-value, and a p-value below 0.05 rejects the model.
+
+### SPY
+
+Daily SPY returns, 2013-12-24 to 2026-10-07 (3,215 days, 32.2 breaches expected).
+
+| Model | Breaches | Kupiec p | Christoffersen p | Cond. coverage p |
+| --- | ---: | ---: | ---: | ---: |
+| Historical simulation | 49 | 0.006 | <0.001 | <0.001 |
+| EWMA, normal | 75 | <0.001 | 0.009 | <0.001 |
+| EWMA, Student-t | 58 | <0.001 | 0.004 | <0.001 |
+| GARCH(1,1), Student-t | **46** | 0.021 | 0.004 | 0.001 |
+
+![SPY daily returns against each model's VaR, with breaches marked](docs/img/spy_var_backtest.png)
+
+### Hedged book
+
+Hypothetical daily P&L of the example book in `src/book.py`, 2013-12-30 to 2026-10-07 (3,208 days, 32.1 breaches expected). The book has two desks:
+
+- **equity_ls:** long $20m across AAPL, MSFT, JPM and UNH, short $20m SPY
+- **rates_fx:** long TLT against short IEF ($10m each side), and long GBP against short EUR ($5m each side)
+
+Results for the whole book:
+
+| Model | Breaches | Kupiec p | Christoffersen p | Cond. coverage p |
+| --- | ---: | ---: | ---: | ---: |
+| Historical simulation | 42 | 0.093 | 0.291 | 0.140 |
+| EWMA, normal | 36 | 0.495 | 0.366 | 0.527 |
+| EWMA, Student-t | 25 | 0.191 | 0.531 | 0.350 |
+| GARCH(1,1), Student-t | 20 | 0.021 | 0.616 | 0.062 |
+
+EWMA with a Student-t passes every test on both desks and on the whole book. The notebook has the per-desk results.
+
+![Book VaR against the sum of the two desk VaRs](docs/img/book_diversification.png)
+
+| Mean 99% VaR (GARCH t) | |
+| --- | ---: |
+| equity_ls | $292k |
+| rates_fx | $148k |
+| Sum of desks | $440k |
+| **Book** | **$313k** |
+
+## Methodology
+
+**Models.** Every model produces a one-day-ahead forecast using only data up to the previous day, and tests check this.
+
+| Model | Volatility | Tail |
+| --- | --- | --- |
+| Historical simulation | None: uses the empirical 1% quantile of the last 500 days | Empirical |
+| EWMA | Exponentially weighted, λ = 0.94 (RiskMetrics) | Normal or Student-t (ν = 5) |
+| GARCH(1,1) | Refitted every 21 days on the trailing 1,000 days using [`arch`](https://github.com/bashtage/arch) | Student-t (ν = 5) |
+
+The Student-t is rescaled to unit variance, so the volatility forecast keeps its meaning and only the shape of the tail changes.
+
+**Backtests.**
+
+| Test | Question | Distribution |
+| --- | --- | --- |
+| Kupiec (1995) | Is the breach rate equal to 1%? Too few breaches also fails. | χ², 1 df |
+| Christoffersen (1998) | Are breaches independent, or does one breach make another more likely the next day? | χ², 1 df |
+| Conditional coverage | Both at once | χ², 2 df |
+
+**Portfolio P&L.** The book's daily P&L is the sum of position × return. Positions are held at fixed dollar amounts, so this is hypothetical P&L. Only days when every market traded are kept: FX trades on US holidays, and the FX return on the next shared day covers the gap.
+
+## Limitations and next steps
+
+- **ν is fixed at 5.** The results show it should be estimated for each series. Next step: use the ν fitted by GARCH, and try a skewed-t for SPY.
+- **ES is estimated but not backtested.** An Acerbi–Székely test would cover it.
+- **The book is modelled as a single P&L series.** A position-level model would allow component VaR, showing which positions drive the risk.
+- **Data is downloaded live.** Results shift slightly each time the notebooks are rerun.
+
+## Project structure
+
+| Path | Contents |
+| --- | --- |
+| `src/data.py` | Price download (Yahoo Finance), cleaning, and conversion to returns |
+| `src/model.py` | VaR/ES models: historical simulation, EWMA, GARCH, parametric normal and Student-t |
+| `src/backtesting.py` | Breaches and the Kupiec, Christoffersen and conditional coverage tests |
+| `src/book.py` | Example portfolio of dollar positions by desk |
+| `notebooks/backtesting.ipynb` | SPY backtest of all four models |
+| `notebooks/book_backtest.ipynb` | Desk and book backtests, and diversification |
+| `test/` | Unit tests, including checks that no model uses future data |
+
+## Usage
 
 Requires Python 3.13 and [uv](https://docs.astral.sh/uv/).
 
@@ -10,91 +104,26 @@ Requires Python 3.13 and [uv](https://docs.astral.sh/uv/).
 uv sync
 ```
 
-## Layout
-
-| File | What it does |
-| --- | --- |
-| `src/data.py` | Downloads prices from Yahoo Finance, cleans them, converts them to returns, and saves/loads them in an in-memory SQLite database |
-| `src/model.py` | Risk models: historical simulation VaR/ES, EWMA volatility, and parametric (normal or Student-t) VaR/ES |
-| `src/backtesting.py` | VaR backtests: exceedances, Kupiec, Christoffersen, and conditional coverage |
-| `src/book.py` | Example portfolio of dollar positions, grouped by desk |
-| `notebooks/backtesting.ipynb` | Walkthrough of backtesting the models on real data |
-
-## Models
-
-| Function | Description |
-| --- | --- |
-| `hs_var`, `hs_es` | Historical simulation VaR and ES over a rolling window (500 days by default) |
-| `ewma_vol` | EWMA volatility, λ = 0.94 by default |
-| `param_var`, `param_es` | Parametric VaR and ES from a volatility, using a normal or Student-t distribution |
-
-Every rolling estimate is shifted by one day, so the figure for a given date uses only data from earlier dates. Losses are returned as positive numbers.
-
-## Backtesting
-
-| Function | Description |
-| --- | --- |
-| `exceedance` | Boolean series of breaches: days where the loss exceeded that day's VaR |
-| `summary` | Number of days, breaches, expected breaches, and hit rate |
-| `kupiec` | Unconditional coverage: is the hit rate equal to `alpha`? (χ², 1 df) |
-| `christoffersen` | Independence: do breaches cluster from one day to the next? (χ², 1 df) |
-| `conditional_coverage` | Kupiec + Christoffersen combined (χ², 2 df) |
-
-Each test returns `(lr, p_value)`, where `lr` is the likelihood ratio statistic. A small p-value means the test rejects the VaR model.
-
-## Example
-
 ```python
 from data import clean_prices, download_prices, to_returns
-from model import ewma_vol, hs_var, param_es, param_var
+from model import garch_vol, param_var
+from backtesting import conditional_coverage, exceedance, kupiec
 
-prices = clean_prices(download_prices(["SPY"]))
-returns = to_returns(prices)["SPY"]
+returns = to_returns(clean_prices(download_prices(["SPY"])))["SPY"]
 
-var_hs = hs_var(returns, alpha=0.01)
+sigma = garch_vol(returns)
+var = param_var(sigma, alpha=0.01, dist="t", nu=5)
 
-sigma = ewma_vol(returns)
-var_t = param_var(sigma, alpha=0.01, dist="t", nu=5)
-es_t = param_es(sigma, alpha=0.01, dist="t", nu=5)
-
-from backtesting import conditional_coverage, exceedance, kupiec, summary
-
-hits = exceedance(returns, var_t)
-summary(hits, alpha=0.01)
+hits = exceedance(returns, var)
 lr, p = kupiec(hits, alpha=0.01)
 lr, p = conditional_coverage(hits, alpha=0.01)
 ```
 
-Run it from `src/` or add `src` to your `PYTHONPATH`.
-
-## Results
-
-99% one-day VaR on SPY daily returns, backtested from 2011-10-17 to 2026-10-07 (3,765 days). All three models are cut to the dates where every model has a forecast. See `notebooks/backtesting.ipynb` for the full walkthrough; rerun it to refresh the numbers.
-
-| Model | Breaches | Expected | Hit rate | Kupiec p | Christoffersen p | Cond. coverage p |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| HS (500 days) | 50 | 37.6 | 1.33% | 0.054 (pass) | <0.0001 (reject) | <0.0001 (reject) |
-| EWMA normal (λ = 0.94) | 85 | 37.6 | 2.26% | <0.0001 (reject) | 0.015 (reject) | <0.0001 (reject) |
-| EWMA t (λ = 0.94, ν = 5) | 65 | 37.6 | 1.73% | <0.0001 (reject) | 0.006 (reject) | <0.0001 (reject) |
-
-![Daily returns against each model's VaR, with breaches marked](docs/img/var_backtest.png)
-
-![Breaches per year for each model against the expected count](docs/img/breaches_per_year.png)
-
-- **No model passes conditional coverage.** HS has about the right number of breaches but they cluster; EWMA has too many and they cluster too.
-- **HS passes Kupiec only just, and fails Christoffersen hard.** Its VaR barely moves, so breaches pile into 2018, 2020 and 2022. After a breach, the chance of another the next day is 14%, against about 1.2% after a normal day.
-- **EWMA fails on the count.** With λ = 0.94 it reacts to shocks within days but forgets them within weeks, so its VaR drops too low in calm markets. A third of its breaches (28 of 85) fall in calm years like 2012-2014 and 2021.
-- **The Student-t helps but doesn't fix it.** Fatter tails cut breaches from 85 to 65; the problem is the volatility forecast, not the tail shape.
-- **Next steps:** a slower decay (λ = 0.97-0.99), a lower ν, or GARCH, whose variance reverts to a long-run level instead of collapsing in calm periods.
+Run from `src/`, or add `src` to your `PYTHONPATH`.
 
 ## Tests
 
 ```bash
-uv run pytest
-```
-
-To skip the tests that need the network:
-
-```bash
-uv run pytest -m "not network"
+uv run pytest                    # all tests
+uv run pytest -m "not network"   # skip tests that download data
 ```
