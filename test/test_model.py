@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from model import ewma_vol, hs_es, hs_var, param_es, param_var
+from model import ewma_vol, garch_vol, hs_es, hs_var, param_es, param_var
 
 
 @pytest.fixture
@@ -88,6 +88,53 @@ def test_ewma_vol_accepts_numpy_array(normal_returns):
     result = ewma_vol(normal_returns.to_numpy())
     assert isinstance(result, pd.Series)
     pd.testing.assert_series_equal(result, ewma_vol(normal_returns))
+
+
+def test_garch_vol_matches_true_vol(normal_returns):
+    vol = garch_vol(normal_returns, window=500)
+    assert vol.mean() == pytest.approx(0.01, rel=0.05)
+
+
+def test_garch_vol_warm_up(normal_returns):
+    vol = garch_vol(normal_returns, window=500)
+    # window observations to fit, the first forecast lands on the next day
+    assert vol.iloc[:500].isna().all()
+    assert vol.iloc[500:].notna().all()
+
+
+@pytest.fixture
+def garch_returns():
+    # GARCH(1,1) with omega = 1e-6, alpha = 0.1, beta = 0.88: long-run vol 0.0071
+    rng = np.random.default_rng(0)
+    z = rng.standard_normal(2000)
+    r = np.empty(2000)
+    var = 1e-6 / (1 - 0.1 - 0.88)
+    for t in range(2000):
+        r[t] = np.sqrt(var) * z[t]
+        var = 1e-6 + 0.1 * r[t] ** 2 + 0.88 * var
+    return pd.Series(r)
+
+
+def test_garch_vol_no_look_ahead(garch_returns):
+    shocked = garch_returns.copy()
+    shocked.iloc[1000] = -0.1
+    before = garch_vol(garch_returns, window=500)
+    after = garch_vol(shocked, window=500)
+    # nothing up to and including day t moves, and the forecast for t + 1 does
+    pd.testing.assert_series_equal(after.iloc[:1001], before.iloc[:1001])
+    assert after.iloc[1001] > before.iloc[1001]
+
+
+def test_garch_vol_short_series_is_all_nan(normal_returns):
+    vol = garch_vol(normal_returns.iloc[:100], window=500)
+    assert len(vol) == 100
+    assert vol.isna().all()
+
+
+def test_garch_vol_accepts_numpy_array(normal_returns):
+    result = garch_vol(normal_returns.to_numpy(), window=500)
+    assert isinstance(result, pd.Series)
+    pd.testing.assert_series_equal(result, garch_vol(normal_returns, window=500))
 
 
 def test_param_normal_known_values():

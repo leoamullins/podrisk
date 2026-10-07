@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
+from arch import arch_model
 
 
 def hs_var(returns, alpha=0.05, window=500, min_periods=450):
@@ -48,6 +49,30 @@ def ewma_vol(pnl, lam=0.94, min_periods=30) -> pd.Series:
     squared_returns = pnl**2
     ewma_var = squared_returns.ewm(alpha=1 - lam, min_periods=min_periods).mean()
     return np.sqrt(ewma_var).shift(1)
+
+
+def garch_vol(returns, window=1000, refit=21, dist="t") -> pd.Series:
+    """
+    rolling GARCH(1,1) volatility forecast. refits every `refit` days on the trailing
+    `window` days, so each forecast only uses data from earlier dates
+    """
+    if not isinstance(returns, pd.Series):
+        returns = pd.Series(returns)
+
+    r = returns.dropna() * 100  # arch fits better on percentage returns
+    if len(r) <= window:
+        return pd.Series(np.nan, index=returns.index, name=returns.name)
+    am = arch_model(r, mean="Zero", vol="GARCH", p=1, q=1, dist=dist)
+
+    pieces = []
+    for i in range(window, len(r), refit):
+        res = am.fit(first_obs=i - window, last_obs=i, disp="off")
+        # row t holds the forecast for t + 1, using params fitted before i
+        f = res.forecast(horizon=1, start=r.index[i - 1], reindex=False)
+        pieces.append(f.variance["h.1"].iloc[:refit])
+
+    vol = np.sqrt(pd.concat(pieces)) / 100
+    return vol.shift(1).reindex(returns.index).rename(returns.name)
 
 
 def _check_dist(dist, nu):
