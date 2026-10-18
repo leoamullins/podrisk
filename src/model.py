@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
-import scipy.stats as stats
 from arch import arch_model
+from scipy import stats
 
 
 def hs_var(returns, alpha=0.05, window=500, min_periods=450):
