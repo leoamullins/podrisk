@@ -1,6 +1,6 @@
 # podrisk
 
-Value at Risk (VaR) and Expected Shortfall (ES) models in Python, with statistical backtests, applied to a single equity index and to a hedged multi-desk portfolio.
+Value at Risk (VaR) and Expected Shortfall (ES) models in Python, with statistical backtests and historical stress tests, applied to a single equity index and to a hedged multi-desk portfolio.
 
 The project asks a practical question: **can a VaR model's forecasts be trusted, and does the answer depend on the portfolio?** Each model forecasts tomorrow's 99% VaR using only past data. Each forecast is then compared with what actually happened, using standard statistical coverage tests.
 
@@ -10,6 +10,8 @@ The project asks a practical question: **can a VaR model's forecasts be trusted,
 - **On a hedged long/short book, the results reverse.** Hedging cancels most of the market's crash asymmetry, so the book's tail is close to normal. EWMA with a Student-t passes every test on every desk, while GARCH t becomes too conservative (20 breaches against 32 expected).
 - **The same model can be too risky for one portfolio and too cautious for another.** A fixed tail parameter (ν = 5) is too thin for SPY and too fat for the book.
 - **Diversification between desks reduces VaR by 28% on average.** The two desks' P&L has a −0.10 correlation, so the book's VaR is well below the sum of the desk VaRs.
+- **ES holds up on the book.** Every model passes the Acerbi–Székely test at 97.5%.
+- **2022 is the stress scenario that matters.** The rates/FX desk loses $1.7m, and gains on the equity desk cut the book's loss to $0.7m.
 
 ## Results
 
@@ -17,7 +19,7 @@ All results are one-day 99% VaR, so a correct model breaches on about 1% of days
 
 ### SPY
 
-Daily SPY returns, 2013-12-24 to 2026-10-07 (3,215 days, 32.2 breaches expected).
+Daily SPY returns, 2013-12-24 to 2026-10-16 (3,222 days, 32.2 breaches expected).
 
 | Model | Breaches | Kupiec p | Christoffersen p | Cond. coverage p |
 | --- | ---: | ---: | ---: | ---: |
@@ -30,7 +32,7 @@ Daily SPY returns, 2013-12-24 to 2026-10-07 (3,215 days, 32.2 breaches expected)
 
 ### Hedged book
 
-Hypothetical daily P&L of the example book in `src/book.py`, 2013-12-30 to 2026-10-07 (3,208 days, 32.1 breaches expected). The book has two desks:
+Hypothetical daily P&L of the example book in `src/book.py`, 2013-12-30 to 2026-10-16 (3,215 days, 32.2 breaches expected). The book has two desks:
 
 - **equity_ls:** long $20m across AAPL, MSFT, JPM and UNH, short $20m SPY
 - **rates_fx:** long TLT against short IEF ($10m each side), and long GBP against short EUR ($5m each side)
@@ -55,6 +57,31 @@ EWMA with a Student-t passes every test on both desks and on the whole book. The
 | Sum of desks | $440k |
 | **Book** | **$313k** |
 
+### Expected shortfall
+
+97.5% ES on the whole book, same dates (80.4 breaches expected). `tail_ratio` is the average loss on breach days divided by the average predicted ES. Near 1 is good.
+
+| Model | Breaches | tail_ratio | Z2 | p |
+| --- | ---: | ---: | ---: | ---: |
+| Historical simulation | 90 | 1.06 | −0.20 | 0.072 |
+| EWMA, normal | 72 | 1.15 | −0.02 | 0.428 |
+| EWMA, Student-t | 66 | 1.02 | 0.18 | 0.951 |
+| GARCH(1,1), Student-t | 62 | 1.02 | 0.21 | 0.974 |
+
+All four pass on the book. At desk level, HS fails on equity_ls and EWMA normal fails on rates_fx.
+
+## Stress test
+
+Each crisis's actual daily returns, replayed on today's book with no trading. Whole book, $ P&L:
+
+| Scenario | Worst day | Worst 10 days | Total |
+| --- | ---: | ---: | ---: |
+| GFC 2008 | −$1.33m | −$1.74m | +$0.41m |
+| COVID 2020 | −$0.82m | −$0.20m | +$0.57m |
+| Rates 2022 | −$0.37m | −$0.74m | −$0.71m |
+
+The hedged equity desk makes money over each crisis. In 2022 the rates/FX desk (long TLT, short IEF) loses $1.7m as long rates rise.
+
 ## Methodology
 
 **Models.** Every model produces a one-day-ahead forecast using only data up to the previous day, and tests check this.
@@ -74,13 +101,16 @@ The Student-t is rescaled to unit variance, so the volatility forecast keeps its
 | Kupiec (1995) | Is the breach rate equal to 1%? Too few breaches also fails. | χ², 1 df |
 | Christoffersen (1998) | Are breaches independent, or does one breach make another more likely the next day? | χ², 1 df |
 | Conditional coverage | Both at once | χ², 2 df |
+| Acerbi–Székely Z2 (2014) | Does ES match the average loss on breach days? | Normal approximation, one-sided |
+
+**Stress test.** Daily returns from three windows (GFC 2008, COVID 2020, Rates 2022) are applied to the current positions.
 
 **Portfolio P&L.** The book's daily P&L is the sum of position × return. Positions are held at fixed dollar amounts, so this is hypothetical P&L. Only days when every market traded are kept: FX trades on US holidays, and the FX return on the next shared day covers the gap.
 
 ## Limitations and next steps
 
 - **ν is fixed at 5.** The results show it should be estimated for each series. Next step: use the ν fitted by GARCH, and try a skewed-t for SPY.
-- **ES is estimated but not backtested.** An Acerbi–Székely test would cover it.
+- **The stress test only covers three past crises**, with positions held fixed. A new kind of shock won't show up.
 - **The book is modelled as a single P&L series.** A position-level model would allow component VaR, showing which positions drive the risk.
 - **Data is downloaded live.** Results shift slightly each time the notebooks are rerun.
 
@@ -90,10 +120,12 @@ The Student-t is rescaled to unit variance, so the volatility forecast keeps its
 | --- | --- |
 | `src/data.py` | Price download (Yahoo Finance), cleaning, and conversion to returns |
 | `src/model.py` | VaR/ES models: historical simulation, EWMA, GARCH, parametric normal and Student-t |
-| `src/backtesting.py` | Breaches and the Kupiec, Christoffersen and conditional coverage tests |
+| `src/backtesting.py` | Breaches, the Kupiec, Christoffersen and conditional coverage tests, and the Z2 ES test |
+| `src/stresstesting.py` | Historical scenario stress test |
 | `src/book.py` | Example portfolio of dollar positions by desk |
 | `notebooks/backtesting.ipynb` | SPY backtest of all four models |
-| `notebooks/book_backtest.ipynb` | Desk and book backtests, and diversification |
+| `notebooks/book_backtest.ipynb` | Desk and book backtests, ES backtest, and diversification |
+| `notebooks/stress_test.ipynb` | Stress test of the book |
 | `test/` | Unit tests, including checks that no model uses future data |
 
 ## Usage
