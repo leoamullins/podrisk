@@ -66,3 +66,15 @@ def christoffersen(hits, alpha):
 def conditional_coverage(hits, alpha):
     lr = kupiec(hits, alpha)[0] + christoffersen(hits, alpha)[0]
     return lr, stats.chi2.sf(lr, 2)
+
+
+def z2(returns, var, es, alpha):
+    """
+    Acerbi-Szekely Z2 test of expected shortfall. small p-value means ES is too low
+    """
+    df = pd.concat({"ret": returns, "var": var, "es": es}, axis=1).dropna()
+    loss = -df["ret"]
+    y = loss * (loss > df["var"]) / (alpha * df["es"])
+    z = 1 - y.mean()
+    se = y.std() / np.sqrt(len(y))
+    return z, stats.norm.cdf(z / se)
